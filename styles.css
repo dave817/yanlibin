@@ -650,8 +650,8 @@ p { margin: 0; text-wrap: pretty; }
 
 .swipe__frame {
   position: relative;
-  width: min(400px, 92vw);
-  height: 580px;
+  width: min(420px, 92vw);
+  height: min(620px, 72svh);
   margin: 0 auto;
 }
 
@@ -686,18 +686,27 @@ p { margin: 0; text-wrap: pretty; }
   border-radius: var(--r-lg);
   overflow: hidden;
   box-shadow:
-    0 1px 3px rgba(26, 19, 12, 0.08),
-    0 12px 30px rgba(26, 19, 12, 0.12),
+    0 1px 2px rgba(26, 19, 12, 0.06),
+    0 10px 24px rgba(26, 19, 12, 0.08),
+    0 24px 60px rgba(26, 19, 12, 0.10),
     0 0 0 1px rgba(26, 19, 12, 0.04);
   cursor: grab;
   user-select: none;
+  -webkit-user-select: none;
   touch-action: none;
   will-change: transform;
   transform-origin: center 120%;
+  -webkit-tap-highlight-color: transparent;
+  backface-visibility: hidden;
 }
-.card:active { cursor: grabbing; }
-.card.is-anim  { transition: transform 0.45s var(--ease-spring), opacity 0.4s ease; }
-.card.is-fly   { transition: transform 0.55s cubic-bezier(.25, .46, .45, .94), opacity 0.45s ease; }
+.card.is-grabbing {
+  cursor: grabbing;
+  box-shadow:
+    0 2px 4px rgba(26, 19, 12, 0.08),
+    0 18px 40px rgba(26, 19, 12, 0.14),
+    0 40px 80px rgba(26, 19, 12, 0.16),
+    0 0 0 1px rgba(26, 19, 12, 0.06);
+}
 
 .card__media {
   position: relative;
@@ -708,6 +717,63 @@ p { margin: 0; text-wrap: pretty; }
 .card__bottle {
   position: absolute; inset: 0;
   display: grid; place-items: center;
+}
+
+/* Love/Nope reveal bands — slide up from bottom of the media area */
+.card__reveal {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 38%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 14%;
+  pointer-events: none;
+  opacity: 0;
+  border-radius: 0;
+}
+.card__reveal::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: inherit;
+  mask: linear-gradient(to top, #000 70%, transparent);
+  -webkit-mask: linear-gradient(to top, #000 70%, transparent);
+}
+.card__reveal span {
+  position: relative;
+  font-family: var(--f-display);
+  font-weight: 500;
+  font-size: clamp(1.8rem, 1rem + 3vw, 2.6rem);
+  letter-spacing: 0.01em;
+  color: var(--paper);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  font-variation-settings: "opsz" 144;
+  padding: 0 var(--s-4);
+  z-index: 1;
+}
+.card__reveal--love {
+  background: linear-gradient(to top, rgba(63, 95, 75, 0.92) 0%, rgba(92, 127, 103, 0.75) 60%, rgba(92, 127, 103, 0) 100%);
+}
+.card__reveal--love span::after {
+  content: "";
+  display: block;
+  width: 60%;
+  height: 2px;
+  background: currentColor;
+  opacity: 0.4;
+  margin: 6px auto 0;
+}
+.card__reveal--nope {
+  background: linear-gradient(to top, rgba(130, 47, 47, 0.92) 0%, rgba(166, 69, 69, 0.75) 60%, rgba(166, 69, 69, 0) 100%);
+}
+.card__reveal--nope span::after {
+  content: "";
+  display: block;
+  width: 60%;
+  height: 2px;
+  background: currentColor;
+  opacity: 0.4;
+  margin: 6px auto 0;
 }
 
 /* Bottle styles per product — rendered inline via SVG in JS */
@@ -755,34 +821,6 @@ p { margin: 0; text-wrap: pretty; }
   line-height: 1.45;
   margin-top: var(--s-1);
   font-variation-settings: "opsz" 14;
-}
-
-/* Stamps */
-.card__stamp {
-  position: absolute;
-  top: 28px;
-  font-family: var(--f-display);
-  font-weight: 600;
-  font-size: 30px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 4px 14px;
-  border: 3px solid currentColor;
-  border-radius: 3px;
-  opacity: 0;
-  pointer-events: none;
-  z-index: 5;
-  font-variation-settings: "opsz" 144;
-}
-.card__stamp--love {
-  left: 22px;
-  color: var(--love);
-  transform: rotate(-12deg);
-}
-.card__stamp--nope {
-  right: 22px;
-  color: var(--nope);
-  transform: rotate(12deg);
 }
 
 /* Empty state */
@@ -926,7 +964,7 @@ p { margin: 0; text-wrap: pretty; }
 
 @media (max-width: 860px) {
   .swipe { padding: var(--s-7) var(--s-4) var(--s-7); }
-  .swipe__frame { height: 540px; }
+  .swipe__frame { height: min(600px, 70svh); }
 }
 
 /* ── Shop grid ───────────────────────────────────────── */

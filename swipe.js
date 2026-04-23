@@ -211,7 +211,27 @@ function initMarble(canvas) {
   resize(); tick();
 }
 
-/* ── Swipe Deck ────────────────────────────────────── */
+/* ── Swipe Deck — premium finger physics ────────────
+   Philosophy:
+     - Touch is primary. Mouse is secondary.
+     - Every pixel of finger movement is mirrored instantly (no easing during drag).
+     - Finger lifted → spring settles with iOS timing OR velocity-scaled fly.
+     - Love/Nope bands reveal from the bottom of the card as you drag.
+     - Card below grows toward 1.0 as top card commits to a direction.
+   ──────────────────────────────────────────────────── */
+
+const SWIPE = Object.freeze({
+  THRESH_RATIO: 0.28,   /* swipe commits past 28% of card width */
+  FLICK_VX:     650,    /* px/s — fast flick commits even if distance < threshold */
+  MAX_ROT_DEG:  14,     /* subtle, not a Tinder flap */
+  Y_DAMPEN:     0.12,   /* how much vertical drag shows up */
+  LIFT_PX:      4,      /* lift when grabbed */
+  SPRING:       'cubic-bezier(.22, 1.2, .36, 1)',
+  FLY:          'cubic-bezier(.16, .68, .43, .99)',
+  MIN_FLY_S:    0.35,
+  MAX_FLY_S:    0.6,
+});
+
 class Deck {
   constructor(el, opts) {
     this.el        = el;
@@ -221,131 +241,216 @@ class Deck {
     this.onAdvance = opts.onAdvance;
 
     this.cards     = [];
-    this.topIdx    = 0;              /* index into products; 0 = first visible */
-    this.THRESH    = 110;
+    this.topIdx    = 0;
 
     this.render();
-    this.stack();
+    this.stack(false);
     this.bindTop();
   }
 
   render() {
-    // Cards in DOM order: index 0 (deepest) ... index N-1 (topmost)
     const frag = document.createDocumentFragment();
-    this.products.forEach((p, i) => {
+    this.products.forEach((p) => {
       const card = document.createElement('article');
       card.className = 'card';
       card.setAttribute('aria-label', `${p.nameLead} ${p.nameTail} — ${p.variant}`);
       card.innerHTML = `
-        <span class="card__stamp card__stamp--love" aria-hidden="true">LOVE</span>
-        <span class="card__stamp card__stamp--nope" aria-hidden="true">SKIP</span>
-        <div class="card__media"><div class="card__bottle">${renderBottle(p)}</div></div>
+        <div class="card__media">
+          <div class="card__bottle">${renderBottle(p)}</div>
+          <div class="card__reveal card__reveal--nope" aria-hidden="true"><span>Nope</span></div>
+          <div class="card__reveal card__reveal--love" aria-hidden="true"><span>Love</span></div>
+        </div>
         <div class="card__body">
           <p class="card__series">${p.series}</p>
           <h3 class="card__name"><em>${p.nameLead}</em> ${p.nameTail}</h3>
           <p class="card__price">$${p.price.toFixed(2)}</p>
           <p class="card__desc">${p.variant}. ${p.desc}</p>
         </div>`;
-      this.el.appendChild(card);
+      frag.appendChild(card);
       this.cards.push(card);
     });
+    this.el.appendChild(frag);
   }
 
-  stack() {
+  /* Visual stack. topIdx card sits flat; next two sit below with small offset+scale. */
+  stack(animate = true) {
     this.cards.forEach((card, i) => {
       if (i < this.topIdx) { card.style.display = 'none'; return; }
-      const offset = i - this.topIdx;           /* 0 = top, 1 = one behind */
-      const y  = Math.min(offset, 3) * 10;
-      const sc = 1 - Math.min(offset, 3) * 0.03;
-      card.style.transform = `translateY(${y}px) scale(${sc})`;
-      card.style.opacity = offset > 3 ? 0 : 1;
-      card.style.zIndex = this.products.length - offset;
+      const offset = i - this.topIdx;
+      const y  = Math.min(offset, 3) * 9;
+      const sc = 1 - Math.min(offset, 3) * 0.032;
+      card.style.transition = animate
+        ? `transform 0.5s ${SWIPE.SPRING}, opacity 0.3s ease`
+        : 'none';
+      card.style.transform  = `translate3d(0, ${y}px, 0) scale(${sc})`;
+      card.style.opacity    = offset > 3 ? 0 : 1;
+      card.style.zIndex     = String(this.products.length - offset);
     });
   }
 
-  get top() { return this.cards[this.topIdx] || null; }
+  get top()  { return this.cards[this.topIdx] || null; }
+  get next() { return this.cards[this.topIdx + 1] || null; }
 
+  /* Bind drag on the current top card. Uses RAF-batched transform writes. */
   bindTop() {
     const card = this.top;
     if (!card) return;
 
+    const loveBand = card.querySelector('.card__reveal--love');
+    const nopeBand = card.querySelector('.card__reveal--nope');
+
     let dragging = false;
-    let sx = 0, sy = 0, dx = 0, dy = 0, pid = null;
+    let pid = null;
+    let sx = 0, sy = 0;
+    let dx = 0, dy = 0;
+    let lastX = 0, lastT = 0, vx = 0;
+    let rafId = null;
 
-    const loveStamp = card.querySelector('.card__stamp--love');
-    const nopeStamp = card.querySelector('.card__stamp--nope');
+    const threshold = () => Math.max(80, card.offsetWidth * SWIPE.THRESH_RATIO);
 
-    const update = (mx, my) => {
-      dx = mx - sx;
-      dy = (my - sy) * 0.08;
-      const rot = dx * 0.04;
-      card.style.transform = `translateX(${dx}px) translateY(${dy}px) rotate(${rot}deg)`;
-      const r = Math.min(Math.abs(dx) / this.THRESH, 1);
-      if (dx > 0) { loveStamp.style.opacity = r; nopeStamp.style.opacity = 0; }
-      else        { nopeStamp.style.opacity = r; loveStamp.style.opacity = 0; }
+    const write = () => {
+      rafId = null;
+      const rot  = (dx / card.offsetWidth) * SWIPE.MAX_ROT_DEG;
+      const lift = dragging ? SWIPE.LIFT_PX : 0;
+      card.style.transform = `translate3d(${dx}px, ${dy - lift}px, 0) rotate(${rot}deg)`;
+
+      const r = Math.min(Math.abs(dx) / threshold(), 1);
+      const eased = r * r * (3 - 2 * r); /* smoothstep */
+      if (dx > 0) { loveBand.style.opacity = eased; nopeBand.style.opacity = 0; }
+      else        { nopeBand.style.opacity = eased; loveBand.style.opacity = 0; }
+
+      /* Next card grows toward 1.0 as top commits */
+      const next = this.next;
+      if (next) {
+        const p  = r;
+        const ny = 9 * (1 - p);
+        const ns = 1 - 0.032 + 0.032 * p;
+        next.style.transform = `translate3d(0, ${ny}px, 0) scale(${ns})`;
+      }
     };
+
+    const schedule = () => { if (rafId === null) rafId = requestAnimationFrame(write); };
 
     const onDown = (e) => {
       if (pid !== null) return;
-      if (e.target.closest('a')) return;
+      if (e.target.closest('a, button')) return;
       pid = e.pointerId;
-      card.setPointerCapture?.(pid);
       dragging = true;
-      sx = e.clientX; sy = e.clientY; dx = 0;
-      card.classList.remove('is-anim', 'is-fly');
+      card.setPointerCapture?.(pid);
+      card.classList.add('is-grabbing');
+      sx = e.clientX; sy = e.clientY;
+      lastX = e.clientX; lastT = performance.now();
+      dx = 0; dy = 0; vx = 0;
       card.style.transition = 'none';
+      const next = this.next;
+      if (next) next.style.transition = 'none';
+      schedule();
       e.preventDefault();
     };
+
     const onMove = (e) => {
       if (!dragging || e.pointerId !== pid) return;
-      update(e.clientX, e.clientY);
+      dx = e.clientX - sx;
+      dy = (e.clientY - sy) * SWIPE.Y_DAMPEN;
+      const now = performance.now();
+      const dt  = now - lastT;
+      if (dt > 0) {
+        /* Exponential moving average so vx smooths spikes */
+        const instVx = (e.clientX - lastX) / dt * 1000;
+        vx = 0.7 * instVx + 0.3 * vx;
+      }
+      lastX = e.clientX; lastT = now;
+      schedule();
       e.preventDefault();
     };
+
     const onUp = (e) => {
       if (!dragging || e.pointerId !== pid) return;
       dragging = false;
+      card.classList.remove('is-grabbing');
       card.releasePointerCapture?.(pid);
       pid = null;
-      if (Math.abs(dx) >= this.THRESH) {
-        this.fly(dx > 0 ? 'love' : 'nope');
+
+      const absDx = Math.abs(dx);
+      const absVx = Math.abs(vx);
+      const commit = absDx >= threshold() || (absVx >= SWIPE.FLICK_VX && absDx > 24);
+
+      if (commit) {
+        this.fly(dx > 0 || (dx === 0 && vx > 0) ? 'love' : 'nope', vx);
       } else {
-        card.classList.add('is-anim');
-        card.style.transform = `translateY(0) scale(1)`;
-        loveStamp.style.opacity = 0;
-        nopeStamp.style.opacity = 0;
+        this.settle();
       }
-      dx = 0;
+      dx = 0; dy = 0; vx = 0;
     };
 
-    card.addEventListener('pointerdown', onDown);
-    card.addEventListener('pointermove', onMove);
-    card.addEventListener('pointerup',   onUp);
+    card.addEventListener('pointerdown',   onDown);
+    card.addEventListener('pointermove',   onMove);
+    card.addEventListener('pointerup',     onUp);
     card.addEventListener('pointercancel', onUp);
 
     this._cleanup = () => {
-      card.removeEventListener('pointerdown', onDown);
-      card.removeEventListener('pointermove', onMove);
-      card.removeEventListener('pointerup',   onUp);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      card.removeEventListener('pointerdown',   onDown);
+      card.removeEventListener('pointermove',   onMove);
+      card.removeEventListener('pointerup',     onUp);
       card.removeEventListener('pointercancel', onUp);
     };
   }
 
-  fly(dir) {
+  /* Spring back to resting position after a short drag. */
+  settle() {
+    const card = this.top;
+    if (!card) return;
+    const loveBand = card.querySelector('.card__reveal--love');
+    const nopeBand = card.querySelector('.card__reveal--nope');
+    card.style.transition = `transform 0.5s ${SWIPE.SPRING}`;
+    card.style.transform  = 'translate3d(0, 0, 0) rotate(0deg)';
+    loveBand.style.transition = 'opacity 0.25s ease';
+    nopeBand.style.transition = 'opacity 0.25s ease';
+    loveBand.style.opacity = '0';
+    nopeBand.style.opacity = '0';
+    /* Reset underlying card */
+    const next = this.next;
+    if (next) {
+      next.style.transition = `transform 0.5s ${SWIPE.SPRING}`;
+      next.style.transform  = `translate3d(0, 9px, 0) scale(${1 - 0.032})`;
+    }
+    /* Clear inline opacity transitions afterwards so next drag is instant */
+    setTimeout(() => {
+      loveBand.style.transition = '';
+      nopeBand.style.transition = '';
+    }, 300);
+  }
+
+  /* Commit the top card out of the deck. */
+  fly(dir, velocity = 0) {
     const card = this.top;
     if (!card || card.dataset.flown) return;
     card.dataset.flown = '1';
 
-    const flyX = (dir === 'love' ? 1 : -1) * (window.innerWidth + 220);
-    const rot  = (dir === 'love' ? 1 : -1) * 28;
+    const sign = dir === 'love' ? 1 : -1;
+    const flyX = sign * (window.innerWidth * 1.2 + 200);
+    const rot  = sign * 22;
 
-    const loveStamp = card.querySelector('.card__stamp--love');
-    const nopeStamp = card.querySelector('.card__stamp--nope');
-    if (dir === 'love') { loveStamp.style.opacity = 1; nopeStamp.style.opacity = 0; }
-    else                { nopeStamp.style.opacity = 1; loveStamp.style.opacity = 0; }
+    /* Duration scales with flick speed — fast = snappy, slow = weighty. */
+    const speed    = Math.max(Math.abs(velocity), 600);
+    const duration = Math.max(SWIPE.MIN_FLY_S, Math.min(SWIPE.MAX_FLY_S, (flyX - Math.abs(parseFloat(card.style.transform) || 0)) / speed));
 
-    card.classList.add('is-fly');
-    card.style.transform = `translateX(${flyX}px) rotate(${rot}deg)`;
-    card.style.opacity = 0;
+    const loveBand = card.querySelector('.card__reveal--love');
+    const nopeBand = card.querySelector('.card__reveal--nope');
+    if (dir === 'love') { loveBand.style.opacity = '1'; nopeBand.style.opacity = '0'; }
+    else                { nopeBand.style.opacity = '1'; loveBand.style.opacity = '0'; }
+
+    card.style.transition = `transform ${duration}s ${SWIPE.FLY}, opacity ${duration}s ease-out`;
+    card.style.transform  = `translate3d(${flyX}px, 0, 0) rotate(${rot}deg)`;
+    card.style.opacity    = '0';
+
+    /* Promote the next card smoothly to resting position */
+    const next = this.next;
+    if (next) {
+      next.style.transition = `transform 0.45s ${SWIPE.SPRING}`;
+      next.style.transform  = 'translate3d(0, 0, 0) scale(1)';
+    }
 
     this._cleanup?.();
     this.onSwipe?.(dir, this.products[this.topIdx]);
@@ -357,29 +462,33 @@ class Deck {
       card.style.display = 'none';
       this.topIdx++;
       this.onAdvance?.(this.topIdx);
-      this.stack();
+      this.stack(false); /* fast sync — next card is already in place from above */
       if (this.topIdx >= this.products.length) { this.onEmpty?.(); return; }
       this.bindTop();
     };
     card.addEventListener('transitionend', handled, { once: true });
-    setTimeout(handled, 700);
+    setTimeout(handled, (duration * 1000) + 150);
   }
 
-  trigger(dir) { if (this.top && !this.top.dataset.flown) this.fly(dir); }
+  /* Programmatic trigger from the action buttons. */
+  trigger(dir) {
+    if (!this.top || this.top.dataset.flown) return;
+    /* Use a synthetic velocity so the fly timing feels like a real flick */
+    this.fly(dir, dir === 'love' ? 1100 : -1100);
+  }
 
   reset() {
     this.cards.forEach(c => {
       c.style.display = '';
-      c.classList.remove('is-anim', 'is-fly');
-      c.style.opacity = 1;
+      c.style.opacity = '1';
       c.removeAttribute('data-flown');
-      const love = c.querySelector('.card__stamp--love');
-      const nope = c.querySelector('.card__stamp--nope');
-      if (love) love.style.opacity = 0;
-      if (nope) nope.style.opacity = 0;
+      const lb = c.querySelector('.card__reveal--love');
+      const nb = c.querySelector('.card__reveal--nope');
+      if (lb) lb.style.opacity = '0';
+      if (nb) nb.style.opacity = '0';
     });
     this.topIdx = 0;
-    this.stack();
+    this.stack(false);
     this.bindTop();
   }
 }
