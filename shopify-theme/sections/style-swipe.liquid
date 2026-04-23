@@ -1,0 +1,188 @@
+{{ 'style-swipe.css' | asset_url | stylesheet_tag }}
+
+{%- liquid
+  assign swipe_collection = section.settings.collection
+  assign max_products     = section.settings.max_products | default: 8
+-%}
+
+<section class="style-swipe-wrap" aria-label="Style Swipe — discover products">
+  {%- comment -%} WebGL marble canvas — sits behind everything {%- endcomment -%}
+  <canvas class="style-swipe-canvas" aria-hidden="true"></canvas>
+
+  {%- comment -%} ── Header ── {%- endcomment -%}
+  <header class="style-swipe-header">
+    <p class="style-swipe-eyebrow">AI Style Swipe</p>
+    <h2 class="style-swipe-title">Find Your Match</h2>
+    <p class="style-swipe-subtitle">Swipe right to love it &nbsp;·&nbsp; left to skip</p>
+  </header>
+
+  {%- comment -%} ── Hint ── {%- endcomment -%}
+  <div class="style-swipe-hint" aria-hidden="true">
+    <span class="style-swipe-hint__arrow style-swipe-hint__arrow--left">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>Nope</span>
+    </span>
+    <span class="style-swipe-hint__arrow style-swipe-hint__arrow--right">
+      <span>Love</span>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </span>
+  </div>
+
+  {%- comment -%} ── Card deck area ── {%- endcomment -%}
+  <div class="style-swipe-deck-area">
+    <div class="style-swipe-deck" id="swipeDeck">
+
+      {%- comment -%}
+        Cards are rendered in REVERSE order so the first product ends up on top.
+        z-index and stack transform are handled by JS.
+      {%- endcomment -%}
+
+      {%- if swipe_collection != blank and shop.products_count > 0 -%}
+        {%- assign swipe_products = swipe_collection.products | limit: max_products -%}
+        {%- for product in swipe_products reversed -%}
+          <article
+            class="swipe-card"
+            data-index="{{ forloop.index0 }}"
+            data-product-url="{{ product.url }}"
+            aria-label="{{ product.title | escape }}"
+          >
+            <span class="swipe-card__stamp swipe-card__stamp--love" aria-hidden="true">LOVE</span>
+            <span class="swipe-card__stamp swipe-card__stamp--nope" aria-hidden="true">NOPE</span>
+
+            <div class="swipe-card__image-wrap">
+              {%- if product.featured_image -%}
+                <img
+                  src="{{ product.featured_image | image_url: width: 600 }}"
+                  alt="{{ product.featured_image.alt | default: product.title | escape }}"
+                  width="600"
+                  height="750"
+                  loading="lazy"
+                >
+              {%- else -%}
+                {{ 'product-1' | placeholder_svg_tag: 'swipe-card__placeholder' }}
+              {%- endif -%}
+            </div>
+
+            <div class="swipe-card__info">
+              <h3 class="swipe-card__name">{{ product.title }}</h3>
+              <p class="swipe-card__price">
+                {%- if product.compare_at_price > product.price -%}
+                  <s>{{ product.compare_at_price | money }}</s>&nbsp;
+                {%- endif -%}
+                {{ product.price | money }}
+              </p>
+              {%- if product.description != blank -%}
+                <p class="swipe-card__description">{{ product.description | strip_html | truncate: 80 }}</p>
+              {%- endif -%}
+            </div>
+          </article>
+        {%- endfor -%}
+
+      {%- else -%}
+        {%- comment -%} Fallback placeholder cards for demo / no collection set {%- endcomment -%}
+        {%- assign placeholder_names = "Dream Vanilla Conditioner,Crush Cacao Shampoo,Crushed Cacao Exfoliation,Fizzle From Harvest Toscin,Drizzle Body Oil,Silk Cloud Serum,Midnight Repair Balm,Velvet Glow Mist" | split: "," -%}
+        {%- assign placeholder_prices = "$24.00,$28.00,$32.00,$19.00,$36.00,$42.00,$29.00,$22.00" | split: "," -%}
+        {%- for i in (1..8) reversed -%}
+          {%- assign idx = forloop.index0 -%}
+          {%- assign pname  = placeholder_names[idx]  | default: "Oreo Beauty Product" -%}
+          {%- assign pprice = placeholder_prices[idx] | default: "$25.00" -%}
+          <article
+            class="swipe-card"
+            data-index="{{ idx }}"
+            data-product-url="/collections/all"
+            aria-label="{{ pname }}"
+          >
+            <span class="swipe-card__stamp swipe-card__stamp--love" aria-hidden="true">LOVE</span>
+            <span class="swipe-card__stamp swipe-card__stamp--nope" aria-hidden="true">NOPE</span>
+
+            <div class="swipe-card__image-wrap">
+              {{ 'product-' | append: forloop.index | placeholder_svg_tag: 'swipe-card__placeholder' }}
+            </div>
+
+            <div class="swipe-card__info">
+              <h3 class="swipe-card__name">{{ pname }}</h3>
+              <p class="swipe-card__price">{{ pprice }}</p>
+              <p class="swipe-card__description">Oreo Beauty — Cacao Series. Restores moisture and revives texture naturally.</p>
+            </div>
+          </article>
+        {%- endfor -%}
+      {%- endif -%}
+
+    </div>
+
+    {%- comment -%} Empty state — shown by JS after all cards swiped {%- endcomment -%}
+    <div class="style-swipe-empty" id="swipeEmpty">
+      <div class="style-swipe-empty__icon">✦</div>
+      <h3>You've seen it all</h3>
+      <p>Explore the full collection</p>
+      <a href="/collections/all" class="style-swipe-cta">Shop All</a>
+    </div>
+  </div>
+
+  {%- comment -%} ── Progress dots ── {%- endcomment -%}
+  <div class="style-swipe-progress" role="progressbar" aria-label="Products viewed"></div>
+
+  {%- comment -%} ── Action buttons ── {%- endcomment -%}
+  <div class="style-swipe-actions" role="group" aria-label="Swipe actions">
+    <button class="swipe-btn swipe-btn--nope" id="btnNope" type="button" aria-label="Skip this product">
+      <span class="swipe-btn__circle" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+          <path d="M7 7l12 12M19 7L7 19" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span>Nope</span>
+    </button>
+
+    <button class="swipe-btn swipe-btn--love" id="btnLove" type="button" aria-label="Love this product">
+      <span class="swipe-btn__circle" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+          <path d="M13 21s-8-5.25-8-10.5A5.25 5.25 0 0 1 13 7.08 5.25 5.25 0 0 1 21 10.5C21 15.75 13 21 13 21Z" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
+      <span>Love</span>
+    </button>
+  </div>
+
+  {%- comment -%} ── Loved items shelf ── {%- endcomment -%}
+  <div class="style-swipe-loved" aria-live="polite" aria-label="Loved products">
+    <p class="style-swipe-loved__label">Loved ♥</p>
+    <div class="style-swipe-loved__items"></div>
+  </div>
+
+</section>
+
+<script src="{{ 'style-swipe.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "Style Swipe",
+  "tag": "div",
+  "class": "style-swipe-section",
+  "settings": [
+    {
+      "type": "collection",
+      "id": "collection",
+      "label": "Product collection",
+      "info": "Leave blank to show placeholder cards"
+    },
+    {
+      "type": "range",
+      "id": "max_products",
+      "label": "Number of products",
+      "min": 4,
+      "max": 20,
+      "step": 2,
+      "default": 8
+    }
+  ],
+  "presets": [
+    {
+      "name": "Style Swipe"
+    }
+  ]
+}
+{% endschema %}
